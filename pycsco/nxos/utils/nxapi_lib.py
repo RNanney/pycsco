@@ -1802,7 +1802,7 @@ def get_existing_portchannel_to_vpc_mappings(device):
     return pc_vpc_mapping
 
 
-def get_vpc_running_config(device, platform='n9k'):
+def get_vpc_running_config(device, model):
     """Gets vpc running config
 
     Args:
@@ -1813,11 +1813,15 @@ def get_vpc_running_config(device, platform='n9k'):
         str: 'show run section vpc'
 
     """
-    platform_commands = {
+    if model.startswith('3'):
+        model = 'n3k'
+    elif model.startswith('9'):
+        model= 'n9k'
+    model_commands = {
         'n9k': 'show running section vpc',
         'n3k': 'show running | section vpc'
     }
-    command = platform_commands[platform]
+    command = model_commands[model]
     try:
         get_data = device.show(command, text=True)
         data_dict = xmltodict.parse(get_data[1])
@@ -1827,7 +1831,7 @@ def get_vpc_running_config(device, platform='n9k'):
     return data
 
 
-def feature_enabled(device, feature):
+def feature_enabled(device, feature, model=None):
     """Checks to see if a feature is enabled
 
     Args:
@@ -1855,24 +1859,17 @@ def feature_enabled(device, feature):
     elif feature == 'scp-server':
         feature = 'scpServer'
 
-    try:
-        data = device.show(command)
-        data_dict = xmltodict.parse(data[1])
-        table = data_dict['ins_api']['outputs']['output']
-        error = table.get('clierror', None)
-        if error is None:
-            features = table['body'].get(
-                'TABLE_cfcFeatureCtrlTable')['ROW_cfcFeatureCtrlTable']
-        else:
-            # For the 3K, the feature table is being returned in the clierror
-            # key/taag as unstructured text.  Ugh.
-            manual_list = error.split('\n')
+    if model:
+        if model.startswith('3'):
+            data = device.show(command, text=True)
+            data_dict = xmltodict.parse(data[1])
+            table = data_dict['ins_api']['outputs']['output']['body']
+            manual_list = table.split('\n')
             features = {}
-            for each in manual_list:
-                stripped = each.strip()
-                words = stripped.split(' ')
+            for each in manual_list[2:]:
+                words = filter(lambda x: x != '', each.split(' '))
                 first = str(words[0])
-                last = str(words[-1])
+                last = str(words[2])
                 features[first] = last
             status = features.get(feature, None)
             if status:
@@ -1880,18 +1877,46 @@ def feature_enabled(device, feature):
                     return True
                 else:
                     return False
-    except (KeyError, AttributeError):
-        return check
-    if features:
-        for each in features:
-            feat = str(each['cfcFeatureCtrlName2'])
-            if feat == feature:
-                enabled = str(each['cfcFeatureCtrlOpStatus2'])
-                if enabled.startswith('enabled'):
-                    # returning here to not loop through each supported
-                    # instance/process of ospf, etc.
-                    return True
-    return False
+        else:
+            try:
+                data = device.show(command)
+                data_dict = xmltodict.parse(data[1])
+                table = data_dict['ins_api']['outputs']['output']
+                error = table.get('clierror', None)
+                if error is None:
+                    features = table['body'].get(
+                        'TABLE_cfcFeatureCtrlTable')['ROW_cfcFeatureCtrlTable']
+                else:
+                    # For the 3K, the feature table is being returned in the clierror
+                    # key/taag as unstructured text.  Ugh.
+                    manual_list = error.split('\n')
+                    features = {}
+                    for each in manual_list:
+                        stripped = each.strip()
+                        words = stripped.split(' ')
+                        first = str(words[0])
+                        last = str(words[-1])
+                        features[first] = last
+                    status = features.get(feature, None)
+                    if status:
+                        if status.startswith('enabled'):
+                            return True
+                        else:
+                            return False
+            except (KeyError, AttributeError):
+                return check
+        if features:
+            for each in features:
+                feat = str(each['cfcFeatureCtrlName2'])
+                if feat == feature:
+                    enabled = str(each['cfcFeatureCtrlOpStatus2'])
+                    if enabled.startswith('enabled'):
+                        # returning here to not loop through each supported
+                        # instance/process of ospf, etc.
+                        return True
+        return False
+    else:
+        return False
 
 
 def get_commands_to_remove_vpc(domain):
@@ -1912,7 +1937,7 @@ def get_commands_to_remove_vpc(domain):
     return commands
 
 
-def peer_link_exists(device, platform):
+def peer_link_exists(device, model):
     """Checks to see if vpc peer link exists
 
     Args:
@@ -1924,7 +1949,7 @@ def peer_link_exists(device, platform):
 
     """
     found = False
-    run = get_vpc_running_config(device, platform)
+    run = get_vpc_running_config(device, model)
     if run:
         vpc_list = run.split('\n')
         for each in vpc_list:
@@ -2265,6 +2290,7 @@ def get_facts(device):
     platform = resource_table.get('chassis_id', None)
     hostname = resource_table.get('host_name', None)
     rr = resource_table.get('rr_reason', None)
+    model = platform[6:10]
     n3k = platform[6] == '3'
 
     command = 'show interface status'
@@ -2395,7 +2421,8 @@ def get_facts(device):
         modules=mod_list,
         power_supply_info=power_supply_list,
         fan_info=fan_list,
-        features=feature_list
+        features=feature_list,
+        model=model
     )
 
     return facts
@@ -2877,7 +2904,7 @@ def get_commands_remove_mtu(delta, interface):
     return commands
 
 
-def get_feature_list(device):
+def get_feature_list(device, model):
     """Gets features supported on switch
 
     Args:
@@ -2892,7 +2919,7 @@ def get_feature_list(device):
     features = None
     feature_list = None
     command = 'show feature'
-    if platform == 'n3k':
+    if model.startswith('3'):
         data = device.show(command, text=True)
         data_dict = xmltodict.parse(data[1])
         features = data_dict['ins_api']['outputs']['output']['body']
