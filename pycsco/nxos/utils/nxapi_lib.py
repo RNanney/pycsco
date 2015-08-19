@@ -1802,7 +1802,7 @@ def get_existing_portchannel_to_vpc_mappings(device):
     return pc_vpc_mapping
 
 
-def get_vpc_running_config(device):
+def get_vpc_running_config(device, platform='n9k'):
     """Gets vpc running config
 
     Args:
@@ -1813,7 +1813,11 @@ def get_vpc_running_config(device):
         str: 'show run section vpc'
 
     """
-    command = 'show running section vpc'
+    platform_commands = {
+        'n9k': 'show running section vpc',
+        'n3k': 'show running | section vpc'
+    }
+    command = platform_commands[platform]
     try:
         get_data = device.show(command, text=True)
         data_dict = xmltodict.parse(get_data[1])
@@ -1908,7 +1912,7 @@ def get_commands_to_remove_vpc(domain):
     return commands
 
 
-def peer_link_exists(device):
+def peer_link_exists(device, platform):
     """Checks to see if vpc peer link exists
 
     Args:
@@ -1920,7 +1924,7 @@ def peer_link_exists(device):
 
     """
     found = False
-    run = get_vpc_running_config(device)
+    run = get_vpc_running_config(device, platform)
     if run:
         vpc_list = run.split('\n')
         for each in vpc_list:
@@ -2261,6 +2265,7 @@ def get_facts(device):
     platform = resource_table.get('chassis_id', None)
     hostname = resource_table.get('host_name', None)
     rr = resource_table.get('rr_reason', None)
+    n3k = platform[6] == '3'
 
     command = 'show interface status'
     xml = device.show(command)
@@ -2357,6 +2362,28 @@ def get_facts(device):
         temp['status'] = str(each.get('ps_status', None))
         fan_list.append(temp)
 
+    command = 'show feature'
+    if n3k:
+        xml = device.show(command, text=True)
+        result = xmltodict.parse(xml[1])
+        resource_table = result['ins_api']['outputs']['output']['body']
+        manual_list = resource_table.split('\n')
+        feature_list = []
+        features = {}
+        for each in manual_list[2:]:
+            words = filter(lambda x: x != '', each.split(' '))
+            feature = str(words[0])
+            state = str(words[2])
+            features[feature] = state
+        feature_list.append(features)
+    else:
+        xml = device.show(command)
+        result = xmltodict.parse(xml[1])
+        features = result['ins_api']['outputs']['output']['body'].get(
+            'TABLE_cfcFeatureCtrlTable')['ROW_cfcFeatureCtrlTable']
+        feature_list.append(features)
+        # 9k functionality needs to be tested
+
     facts = dict(
         os=os,
         kickstart_image=kickstart,
@@ -2367,7 +2394,8 @@ def get_facts(device):
         interfaces_detail=detailed_list,
         modules=mod_list,
         power_supply_info=power_supply_list,
-        fan_info=fan_list
+        fan_info=fan_list,
+        features=feature_list
     )
 
     return facts
@@ -2864,23 +2892,36 @@ def get_feature_list(device):
     features = None
     feature_list = None
     command = 'show feature'
-    try:
-        data = device.show(command)
+    if platform == 'n3k':
+        data = device.show(command, text=True)
         data_dict = xmltodict.parse(data[1])
-        features = data_dict['ins_api']['outputs']['output']['body'].get(
-            'TABLE_cfcFeatureCtrlTable')['ROW_cfcFeatureCtrlTable']
-    except (KeyError, AttributeError):
-        raw_list = data_dict['ins_api']['outputs']['output']['clierror'].split('\n')
+        features = data_dict['ins_api']['outputs']['output']['body']
+        raw_list = features.split('\n')
         features = []
         for line in raw_list[2:]:
             tmp = {}
-            split_line = line.split(' ')
-            feat = split_line[0].strip()
-            print feat
+            split_line = filter(lambda x: x != '', line.split(' '))
+            feat = split_line[0]
             tmp['cfcFeatureCtrlName2'] = feat
             features.append(tmp)
-    except:
-        return []
+    else:
+        try:
+            data = device.show(command)
+            data_dict = xmltodict.parse(data[1])
+            features = data_dict['ins_api']['outputs']['output']['body'].get(
+                'TABLE_cfcFeatureCtrlTable')['ROW_cfcFeatureCtrlTable']
+        except (KeyError, AttributeError):
+            raw_list = data_dict['ins_api']['outputs']['output']['clierror'].split('\n')
+            features = []
+            for line in raw_list[2:]:
+                tmp = {}
+                split_line = line.split(' ')
+                feat = split_line[0].strip()
+                print feat
+                tmp['cfcFeatureCtrlName2'] = feat
+                features.append(tmp)
+        except:
+            return []
 
     if features:
         for each in features:
