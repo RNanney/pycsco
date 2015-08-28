@@ -2290,8 +2290,13 @@ def get_facts(device):
     platform = resource_table.get('chassis_id', None)
     hostname = resource_table.get('host_name', None)
     rr = resource_table.get('rr_reason', None)
-    model = platform[6:10]
-    n3k = platform[6] == '3'
+    platforml = platform.lstrip('Nexus')
+    platformr = platforml.rstrip('Chassis')
+    models = platformr.strip()
+    if len(models) > 4:
+        model = models[:4]
+    else: model = models
+    n3k = model.startswith('3')
 
     command = 'show interface status'
     xml = device.show(command)
