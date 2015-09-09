@@ -21,6 +21,7 @@ try:
     from os.path import expanduser
     from nxapi import NXAPI
     from error import CLIError
+    from urllib2 import HTTPError
 except ImportError as e:
     print '***************************'
     print e
@@ -83,6 +84,25 @@ class Device():
         if clierror:
             return CLIError(clierror, msg)
 
+    def foo_data(self, retry=10):
+        retry -= 1
+        clierror = None
+        try:
+            data = self.sw1.send_req()
+            data_dict = xmltodict.parse(data[1])
+            clierror = self.cli_error_check(data_dict)
+        except HTTPError as e:
+            if retry > 0:
+                data = self.foo_data(retry)
+            else:
+                raise e
+        if clierror:
+            if 'denied' in clierror.msg and retry > 0:
+                data = self.foo_data(retry)
+            else:
+                raise clierror
+        return data
+
     def show(self, command, fmat='xml', text=False):
         if text is False:
             self.sw1.set_msg_type('cli_show')
@@ -92,14 +112,8 @@ class Device():
         self.sw1.set_out_format(fmat)
         self.sw1.set_cmd(command)
 
-        data = self.sw1.send_req()
-        data_dict = xmltodict.parse(data[1])
-        clierror = self.cli_error_check(data_dict)
-        if clierror:
-            raise clierror
-
+        data = self.foo_data()
         return data
-       
 
     def config(self, command, fmat='xml'):
         self.sw1.set_msg_type('cli_conf')
